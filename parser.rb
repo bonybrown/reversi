@@ -1,0 +1,352 @@
+class Parser
+  
+  attr_reader :lines, :labels, :types, :variable_types
+  def initialize
+    @state = :header
+    @stack = []
+    @line_number = 1
+    @lines = {}
+    @labels = {}
+    @in_case = false
+    @types = {}
+    @type_id = 0
+    @type_state = :normal
+    @variable_types = {}
+    @function_started = false
+    @locals = {}
+    @pending_function_start = false
+    @pending_label = nil
+  end
+  
+  def store_type( type_id, type )
+    if @type_state == :record
+      if type_id.to_i > 0
+        @type_state = :normal
+      else
+        @types[@type_id] << type_id
+      end
+    end
+    if @type_state != :record
+      @type_id = type_id.to_i
+      if type == 'RECORD'
+        @type_state = :record
+        type = []
+      end
+      @types[@type_id] = type
+    end
+  end
+  
+  def get_type_of( type_id )
+    type_id = type_id.to_i
+    td = @types[type_id]
+    while td.to_s.match(/^ARRAY/) && type_id >= 0
+      type_id -= 1
+      td = @types[type_id]
+    end
+    td
+  end
+  
+  def store_variable( name, type_id, type_name )
+    if name == 'PRIVATE'
+      name = type_id
+      type_id = type_name
+    end
+    @variable_types[name] = get_type_of( type_id )
+    puts "VARIABLE #{name} is #{@variable_types[name]}"
+  end
+
+  def store_local( name, type_id, type_name )
+    @locals[name] = get_type_of( type_id )
+    puts "LOCAL #{name} is #{@locals[name]}"
+  end
+
+  def parse( line )
+    #part = line.scan(/`[^']+'|\S+/)
+    part = line.scan(/\S+/)
+    part.each do |v|
+      v[0] = '\'' if v[0] == '`'
+    end
+    p part
+
+    if @state != :body && @state != :locals
+      case line
+      when /Function/
+        @state = :body
+      when /Global variables:/, /Module variables:/
+        @state = :variables
+      when /Number of types:/
+        @state = :type
+      when /Number/, /Module/
+        @state = :header
+      else
+        case @state
+        when :variables
+          store_variable( part[0], part[1] , part[2] )
+        when :type
+          store_type( part[0], part[1] )
+        end
+      end
+    end
+    if @state == :locals
+      case
+      when line[0] != "\t"
+        @state = :body
+      else
+        store_local( part[0], part[1] , part[2] )
+      end
+    end
+    if @state == :body
+      case
+      when line.match(/Locals variables:/)
+        @state = :locals
+      when part[0] == 'line'
+        r_line part
+      when part[0] == 'Function'
+        r_function part
+      else
+        r_body part if !part.empty?
+      end
+    end
+  end
+  
+  def label( value )
+    #@labels[@line_number] = value
+    @pending_label = value
+  end
+  def line( value )
+    #puts "LINE: #{@line_number} #{value}"
+#     while( @lines[@line_number] )
+#       @line_number +=1
+#     end
+    @lines[@line_number] = [] if @lines[@line_number].nil?
+    
+    @lines[@line_number] << @pending_label unless @pending_label.nil?
+    @lines[@line_number] << "\t" + value
+    @pending_label = nil
+  end
+  
+  
+  def function_arity( funcspec )
+    data = funcspec.split(/[()]/)
+    [data[0],data[1].to_i]
+  end
+  
+  def numeric( value )
+    value.gsub(/[^0-9]/,'').to_i
+  end
+  
+  def is_numeric(value)
+    value.gsub(/'/,'') == numeric(value).to_s
+  end
+  
+  def r_body(part)
+    label = ''
+    case part[0]
+    when /l_\d+/
+      label part.shift + ': '
+    end
+
+    case part[0]
+    when 'oper'
+      part.shift
+    end
+    
+    case part[0]
+    when 'pushNull'
+      @stack.push 'nil'
+    when 'pushInt'
+      @stack.push numeric(part[1]).to_s
+    when 'pushCon'
+      if is_numeric(part[1])
+        @stack.push numeric(part[1]).to_s 
+      else
+        @stack.push part[1..part.length-3].join(' ')
+      end
+    when /^push/
+      @stack.push part[1]
+    when 'assF'
+      value = @stack.pop
+      line "#{@stack.pop} = #{value}"
+    when 'assR'
+      value = @stack.pop
+      line "#{@stack.pop} = #{value} #WARNING: assR unverified"
+    when 'load'
+      load_count = part[1].to_i
+      args = []
+      load_count.times do
+        args.unshift @stack.pop
+      end
+      @stack.push "#{args.join(', ')} = #{@stack.pop}"
+    when 'retAll'
+      ret_count = part[1].to_i
+      args = []
+      ret_count.times do
+        args.unshift @stack.pop
+      end
+      if ret_count == 1
+        line "RETURN #{args[0]}"
+      else
+        line "RETURN [#{args.join(', ')}]"
+      end
+    when /call[N\d]/
+      name,arg_count = function_arity( part[1] )
+      args = []
+      arg_count.times do
+        args.unshift @stack.pop
+      end
+      case name
+      when '<builtin>.rts_doCat'
+        @stack.push "#{args[0]} += #{args[1]}.join"
+      when '<builtin>.length'
+        @stack.push "#{args[0]}.length"
+      when '<builtin>.rts_forInit'
+        line "#{args[0]} = #{args[1]} # FOR LOOP( #{args[0]} = #{args[1]} ; #{args[0]} += #{args[2]} ; #{args[0]} <= #{args[3]})"
+        @stack.push "(#{args[3]} - #{args[0]})"
+      else
+        @stack.push "#{name}(#{args.map{|v|v.to_s}.join(',')})"
+      end
+    when 'arrSub', 'strSub', 'strSubL'
+      subscript = @stack.pop
+      @stack.push "#{@stack.pop}[#{subscript}]"
+    when 'strSub2', 'strSubL2'
+      end_pos = numeric( @stack.pop ) - 1
+      start_pos = numeric( @stack.pop ) - 1
+      @stack.push "#{@stack.pop}[#{start_pos}..#{end_pos}]"
+    when 'genList'
+      count = part[1].match((/\d+/))[0].to_i
+      args = []
+      count.times do
+        args.unshift @stack.pop
+      end
+      @stack.push "[#{args.join(', ')}]"
+    when 'member'
+      var_name = @stack.pop.split('[')[0]
+      type = @locals[var_name] || @variable_types[var_name] || {}
+      member_index = part[1].to_i
+      @stack.push "#{var_name}.#{type.fetch(member_index){'unknown_member:' + member_index.to_s}}"
+    when 'extend'
+      var_name = @stack.pop.split('[')[0]
+      type = @locals[var_name] || @variable_types[var_name] || ["UNKNOWN MEMBERS"]
+      type.each do |member|
+        @stack.push "#{var_name}.#{member}"
+      end
+    when 'ret'
+      line 'RETURN'
+    when 'rts_Op1Clipp(1)'
+      @stack.push "#{@stack.pop}.rstrip"
+    when 'rts_Op2Eq(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} == #{rhs})"
+    when 'rts_Op2Ne(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} != #{rhs})"
+    when 'rts_Op2Lt(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} < #{rhs})"
+    when 'rts_Op2Le(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} <= #{rhs})"
+    when 'rts_Op2Gt(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} > #{rhs})"
+    when 'rts_Op2Ge(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} >= #{rhs})"
+    when 'rts_Op2Or(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} || #{rhs})"
+    when 'rts_Op2And(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} && #{rhs})"
+    when 'rts_Op2Pl(2)', 'rts_Op2IntPl(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} + #{rhs})"
+    when 'rts_Op2Mu(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} * #{rhs})"
+    when 'rts_Op2Mo(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} % #{rhs})"
+    when 'rts_Op2Di(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} / #{rhs})"
+    when 'rts_Op1UMi(1)' #unary minus
+      @stack.push "(-#{@stack.pop})"
+    when 'rts_Op2Mi(2)', 'rts_Op2IntMi(2)'
+      rhs = @stack.pop
+      @stack.push "(#{@stack.pop} - #{rhs})"
+    when 'rts_Op1IsNotNull(1)'
+      @stack.push "(!#{@stack.pop}.nil?)"
+    when 'rts_Op1IsNull(1)'
+      @stack.push "(#{@stack.pop}.nil?)"
+    when 'rts_Op1Not(1)'
+      @stack.push "(!#{@stack.pop})"
+    when '*jpe'
+      #TODO this is a case statement
+      unless @in_case
+        line "case #{@stack.pop}:"
+      end
+      line "  when #{part[1]} GOTO #{part[2]}"
+    when '*jpz'
+      line "IF NOT #{@stack.pop} GOTO #{part[1]}"
+    when '*jnz'
+      line "IF #{@stack.pop} GOTO #{part[1]}"
+    when '*jnc'
+      line "IF #{@stack.pop} >= 0 GOTO #{part[1]} #WARNING: *jnc unverified  OpFor"
+    when '*jpc'
+      line "IF #{@stack.pop} < 0 GOTO #{part[1]} #WARNING: *jpc unverified NEXT LOOP"
+    when '*goto'
+      line 'GOTO ' + part[1] 
+    when '-ExceptionTable:'
+      line 'ON ERROR DO SOMETHING #probably this on next line'
+    when 'popArg'
+      var_num = numeric(part[1])
+      line "#{@locals.keys[var_num]} = FUNCTION_ARGUMENT(#{var_num}) # #{@locals[@locals.keys[var_num]]}"
+    when 'rts_Op2Test(2)'
+      test_var = @stack.pop
+      against = @stack.pop
+      line "local_test_value = #{against}" unless against.nil?
+      @stack.push "#{test_var} == local_test_value"
+    when 'rts_OpFor(2)'
+      loop_limit = @stack.pop
+      loop_var = @stack.pop
+      line "#{loop_var} += 1 # FOR LOOP NEXT #{loop_var}"
+      @stack.push "(#{loop_limit} - #{loop_var})"
+    when 'rts_OpForStep(3)'
+      loop_limit = @stack.pop
+      loop_step = @stack.pop
+      loop_var = @stack.pop
+      line "#{loop_var} += #{loop_step} # FOR LOOP NEXT #{loop_var} STEP #{loop_step}"
+      @stack.push "(#{loop_limit} - #{loop_var})"
+    when 'rts_OpPop(1)'
+      line "local_test_value = nil # rts_OpPop(1) squashed here"
+    else
+      line "!!UNHANDLED OPERATION: #{part}"
+    end
+    
+    @in_case = part[0] == '*jpe'
+  end
+  def r_line(part)
+    #puts "R_LINE #{part}"
+    @line_number = part[1].to_i unless @lines[part[1].to_i]
+    line "FUNCTION #{@pending_function_start}" if @pending_function_start
+    @pending_function_start = false
+    while p=@stack.pop
+      line p + " # line left on stack"
+    end
+    #@stack.clear
+  end
+  def r_function(part)
+    if @function_started
+      line "END FUNCTION"
+    end
+    @pending_function_start = parse_function_name(part[1] )
+    @function_started = true
+    @locals.clear
+  end
+  
+  def parse_function_name(value)
+    p = value.split('(')
+    p[0]
+  end
+end
