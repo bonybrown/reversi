@@ -140,6 +140,38 @@ class Parser
   end
   
   def r_body(part)
+
+    # This is the list of operations 
+    # extracted from a body of code.
+    # Those marked with * are not yet implemented
+    #   rts_Op1Clipp(1)
+    # * rts_Op1Column(1)
+    #   rts_Op1IsNotNull(1)
+    #   rts_Op1IsNull(1)
+    #   rts_Op1Not(1)
+    # * rts_Op1Spaces(1)
+    #   rts_Op1UMi(1)
+    #   rts_Op2And(2)
+    #   rts_Op2Di(2)
+    #   rts_Op2Eq(2)
+    #   rts_Op2Ge(2)
+    #   rts_Op2Gt(2)
+    #   rts_Op2IntMi(2)
+    # * rts_Op2IntMu(2)
+    #   rts_Op2IntPl(2)
+    #   rts_Op2Le(2)
+    #   rts_Op2Lt(2)
+    #   rts_Op2Mi(2)
+    #   rts_Op2Mo(2)
+    #   rts_Op2Mu(2)
+    #   rts_Op2Ne(2)
+    #   rts_Op2Or(2)
+    #   rts_Op2Pl(2)
+    #   rts_Op2Test(2)
+    #   rts_OpFor(2)
+    #   rts_OpForStep(3)
+    #   rts_OpPop(1)
+        
     label = ''
     case part[0]
     when /l_\d+/
@@ -196,7 +228,7 @@ class Parser
       end
       case name
       when '<builtin>.rts_doCat'
-        @stack.push "#{args[0]} += #{args[1]}.join"
+        @stack.push "#{args[0]} = #{args[1]}.join"
       when '<builtin>.length'
         @stack.push "#{args[0]}.length"
       when '<builtin>.rts_forInit'
@@ -209,13 +241,14 @@ class Parser
       subscript = @stack.pop
       @stack.push "#{@stack.pop}[#{subscript}]"
     when 'strSub2', 'strSubL2'
-      end_pos = numeric( @stack.pop ) - 1
-      start_pos = numeric( @stack.pop ) - 1
+      end_pos = "(#{@stack.pop} - 1)"
+      start_pos = "(#{@stack.pop} - 1)"
       @stack.push "#{@stack.pop}[#{start_pos}..#{end_pos}]"
     when 'genList'
       count = part[1].match((/\d+/))[0].to_i
       args = []
       count.times do
+        raise "stack underflow" if @stack.length == 0
         args.unshift @stack.pop
       end
       @stack.push "[#{args.join(', ')}]"
