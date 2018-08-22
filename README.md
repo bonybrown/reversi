@@ -37,3 +37,11 @@ is called.
 *TODO:* may need to return some kind of return object that indicates an 
 _actual_ return statement has been executed, to cater
 for early returned functions.
+
+
+## Useful links
+
+FourJs documentation downloads (user manuals for GDC, etc) [http://4js.com/download/documentation](http://4js.com/download/documentation)
+
+FourJs online documentation [http://4js.com/online_documentation/fjs-fgl-3.00.02-manual-html/index.html](http://4js.com/online_documentation/fjs-fgl-3.00.02-manual-html/index.html).
+This has details of all the built-in functions, so can be used as a reference for implementation of methods and keywords.
