@@ -66,7 +66,7 @@ class Parser
     part.each do |v|
       v[0] = '\'' if v[0] == '`'
     end
-    p part
+    #p part
 
     if @state != :body && @state != :locals
       case line
@@ -192,7 +192,10 @@ class Parser
       if is_numeric(part[1])
         @stack.push numeric(part[1]).to_s 
       else
-        @stack.push part[1..part.length-3].join(' ')
+        string = part[1..part.length].join(' ')
+        rindex = string.rindex("'")
+        index = string.index("'")
+        @stack.push '"' + string[index+1..rindex-1].gsub('"','\"') + '"'
       end
     when /^push/
       @stack.push part[1]

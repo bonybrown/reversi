@@ -4,7 +4,6 @@ require_relative 'parser'
 parser = Parser.new
 
 ARGF.each_line do |l|
-  puts l
   parser.parse(l)
 end
 
