@@ -14,6 +14,8 @@ class Parser
     @variable_types = {}
     @function_started = false
     @locals = {}
+    @globals_resolved = false
+    @globals = {}
     @pending_function_start = false
     @pending_label = nil
   end
@@ -46,6 +48,21 @@ class Parser
     td
   end
   
+  def store_global( name, definition )
+    puts "GLOBAL #{name} #{definition}"
+    @globals[name] = definition
+  end
+  
+  def resolve_globals
+    if !@globals_resolved
+      @globals.each_pair do |k,v|
+        @globals[k] = @types.select{|a,b| b==v}.keys[0]
+        @globals[k] = get_type_of(@globals[k])
+      end
+    end
+    @globals_resolved = true
+  end
+  
   def store_variable( name, type_id, type_name )
     if name == 'PRIVATE'
       name = type_id
@@ -71,8 +88,11 @@ class Parser
     if @state != :body && @state != :locals
       case line
       when /Function/
+        resolve_globals
         @state = :body
-      when /Global variables:/, /Module variables:/
+      when /Global variables:/, /Globals/
+        @state = :globals
+      when /Module variables:/
         @state = :variables
       when /Number of types:/
         @state = :type
@@ -80,10 +100,12 @@ class Parser
         @state = :header
       else
         case @state
+        when :globals
+          store_global( part[0], part[1..10].join(' ') )
         when :variables
           store_variable( part[0], part[1] , part[2] )
         when :type
-          store_type( part[0], part[1] )
+          store_type( part[0], part[1..10].reject{|s| s.match(/s:\d+/)}.join(' ') )
         end
       end
     end
@@ -140,6 +162,7 @@ class Parser
   end
   
   def r_body(part)
+    
 
     # This is the list of operations 
     # extracted from a body of code.
@@ -257,14 +280,15 @@ class Parser
       @stack.push "[#{args.join(', ')}]"
     when 'member'
       var_name = @stack.pop.split('[')[0]
-      type = @locals[var_name] || @variable_types[var_name] || {}
+      type = @locals[var_name] || @variable_types[var_name] || @globals[var_name] || {}
       member_index = part[1].to_i
       @stack.push "#{var_name}.#{type.fetch(member_index){'unknown_member:' + member_index.to_s}}"
     when 'extend'
-      var_name = @stack.pop.split('[')[0]
-      type = @locals[var_name] || @variable_types[var_name] || ["UNKNOWN MEMBERS"]
+      operand = @stack.pop
+      var_name = operand.split('[')[0]
+      type = @locals[var_name] || @variable_types[var_name] || @globals[var_name] || ["UNKNOWN MEMBERS"]
       type.each do |member|
-        @stack.push "#{var_name}.#{member}"
+        @stack.push "#{operand}.#{member}"
       end
     when 'ret'
       line 'RETURN'
