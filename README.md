@@ -9,6 +9,31 @@ ruby-like approximation of the source code.
 There's plenty of work still to be done until
 the result is like `substr.rb` below.
 
+## Output Formats
+
+The `--output` command line switch controls the output format
+of the command.
+
+Options are:
+
+### human (default)
+
+This output is the most human readable. Line numbers usually
+do not align with the original source, and original lines of
+code are sometimes split over several lines.
+
+## debug
+
+In this output, the output lines match the original source.
+
+This format is suitable for use with the fglrun debugger.
+
+## executable (not yet implemented)
+
+This format is to be in a form of ruby code that can be
+executed. It will contain code blocks in a hash of proc
+objects and could be quite hard to read.
+
 ## substr.rb
 
 This is a hand-modified version of a function

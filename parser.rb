@@ -1,7 +1,8 @@
 class Parser
   
   attr_reader :lines, :labels, :types, :variable_types
-  def initialize
+  def initialize( output_style )
+    @output_style = output_style
     @state = :header
     @stack = []
     @line_number = 1
@@ -48,8 +49,12 @@ class Parser
     td
   end
   
+  def output_variable_declaration( decl )
+    (@output_style == :human ? $stdout : $stderr).puts decl
+  end
+  
   def store_global( name, definition )
-    puts "GLOBAL #{name} #{definition}"
+    output_variable_declaration "GLOBAL #{name} #{definition}"
     @globals[name] = definition
   end
   
@@ -69,12 +74,12 @@ class Parser
       type_id = type_name
     end
     @variable_types[name] = get_type_of( type_id )
-    puts "VARIABLE #{name} is #{@variable_types[name]}"
+    output_variable_declaration "VARIABLE #{name} is #{@variable_types[name]}"
   end
 
   def store_local( name, type_id, type_name )
     @locals[name] = get_type_of( type_id )
-    puts "LOCAL #{name} is #{@locals[name]}"
+    output_variable_declaration "LOCAL #{name} is #{@locals[name]}"
   end
 
   def parse( line )
