@@ -1,7 +1,7 @@
 class Parser
   
   attr_reader :lines, :labels, :types, :variable_types
-  def initialize( output_style )
+  def initialize( output_style , global_finder)
     @output_style = output_style
     @state = :header
     @stack = []
@@ -19,6 +19,7 @@ class Parser
     @globals = {}
     @pending_function_start = false
     @pending_label = nil
+    @global_finder = global_finder
   end
   
   def store_type( type_id, type )
@@ -61,8 +62,17 @@ class Parser
   def resolve_globals
     if !@globals_resolved
       @globals.each_pair do |k,v|
-        @globals[k] = @types.select{|a,b| b==v}.keys[0]
-        @globals[k] = get_type_of(@globals[k])
+        if v=='RECORD'
+          index = @global_finder.get_global_type_index(k)
+          @globals[k] = get_type_of(index)
+        else
+          @globals[k] = @types.select{|a,b| b==v}.keys[0]
+          @globals[k] = get_type_of(@globals[k])
+        end
+
+        #@globals[k] = %W(program_id version fund_id sub_fund state_code wrk_grp message function table mode sqlcode from_dte to_dte request rep_pprog instal_flags thread_id) if k == 'rw500'
+        #@globals[k] = %W(lu_user lu_term lu_time desc xcheck prefix code) if k == 'rw070d'
+        output_variable_declaration "GLOBAL #{k} is #{@globals[k]}"
       end
     end
     @globals_resolved = true
@@ -279,7 +289,7 @@ class Parser
       count = part[1].match((/\d+/))[0].to_i
       args = []
       count.times do
-        raise "stack underflow" if @stack.length == 0
+        $stdout.puts "stack underflow" if @stack.length == 0
         args.unshift @stack.pop
       end
       @stack.push "[#{args.join(', ')}]"
@@ -292,6 +302,7 @@ class Parser
       operand = @stack.pop
       var_name = operand.split('[')[0]
       type = @locals[var_name] || @variable_types[var_name] || @globals[var_name] || ["UNKNOWN MEMBERS"]
+      $stdout.puts "ERROR EXTENDING #{operand}" unless type.respond_to? :each
       type.each do |member|
         @stack.push "#{operand}.#{member}"
       end
@@ -346,6 +357,9 @@ class Parser
       @stack.push "(#{@stack.pop}.nil?)"
     when 'rts_Op1Not(1)'
       @stack.push "(!#{@stack.pop})"
+    when 'rts_Op2Using(2)'
+      fmt = @stack.pop
+      @stack.push "( #{@stack.pop}.format(#{fmt}) )"
     when '*jpe'
       #TODO this is a case statement
       unless @in_case
@@ -383,6 +397,16 @@ class Parser
       loop_var = @stack.pop
       line "#{loop_var} += #{loop_step} # FOR LOOP NEXT #{loop_var} STEP #{loop_step}"
       @stack.push "(#{loop_limit} - #{loop_var})"
+    when 'callRep'
+      arg_count = part[2].to_i
+      report_id = part[1]
+      line "CALL REPORT #{report_id} with #{arg_count} args"
+      args = []
+      arg_count.times do
+        $stdout.puts "stack underflow" if @stack.length == 0
+        args.unshift @stack.pop
+      end
+      line "call_report #{report_id}, [#{args.join(', ')}]"
     when 'rts_OpPop(1)'
       line "local_test_value = nil # rts_OpPop(1) squashed here"
     else

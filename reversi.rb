@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 require_relative 'parser'
+require_relative 'global_finder'
 require 'optparse'
 
 OUTPUT_FORMATS=[:human,:debug,:executable]
@@ -28,8 +29,9 @@ if ! OUTPUT_FORMATS.include?(options[:output])
   exit(1)
 end
 
+globals = GlobalFinder.new(ARGV[0]+ '.42m')
+parser = Parser.new(options[:output], globals)
 
-parser = Parser.new(options[:output])
 
 ARGF.each_line do |l|
   parser.parse(l)
