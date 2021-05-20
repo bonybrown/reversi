@@ -100,10 +100,10 @@ class Parser
       v[0] = '\'' if v[0] == '`'
     end
     #p part
-
+    #$stdout.puts "Line=#{@input_line_number} State=#{@state}"
     if @state != :body && @state != :locals
       case line
-      when /Function/
+      when /Function /
         resolve_globals
         @state = :body
       when /Global variables:/, /Globals/
@@ -121,7 +121,11 @@ class Parser
         when :variables
           store_variable( part[0], part[1] , part[2] )
         when :type
-          store_type( part[0], part[1..10].reject{|s| s.match(/s:\d+/)}.join(' ') )
+          if line.include?('[') && line.include?('xml')
+            $stderr.puts "XML ANNOTATION #{line}"
+          else
+            store_type( part[0], part[1..10].reject{|s| s.match(/s:\d+/)}.join(' ') )
+          end
         end
       end
     end
