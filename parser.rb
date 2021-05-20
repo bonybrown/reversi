@@ -92,8 +92,9 @@ class Parser
     output_variable_declaration "LOCAL #{name} is #{@locals[name]}"
   end
 
-  def parse( line )
+  def parse( line, index )
     #part = line.scan(/`[^']+'|\S+/)
+    @input_line_number = index
     part = line.scan(/\S+/)
     part.each do |v|
       v[0] = '\'' if v[0] == '`'
@@ -126,7 +127,7 @@ class Parser
     end
     if @state == :locals
       case
-      when line[0] != "\t"
+      when line.length > 60 || line.match(/line \d+:/)
         @state = :body
       else
         store_local( part[0], part[1] , part[2] )
@@ -289,15 +290,16 @@ class Parser
       count = part[1].match((/\d+/))[0].to_i
       args = []
       count.times do
-        $stdout.puts "stack underflow" if @stack.length == 0
+        $stderr.puts "stack underflow in genList (input line #{@input_line_number})" if @stack.length == 0
         args.unshift @stack.pop
       end
       @stack.push "[#{args.join(', ')}]"
     when 'member'
-      var_name = @stack.pop.split('[')[0]
+      stack_top = @stack.pop
+      var_name = stack_top.split('[')[0]
       type = @locals[var_name] || @variable_types[var_name] || @globals[var_name] || {}
       member_index = part[1].to_i
-      @stack.push "#{var_name}.#{type.fetch(member_index){'unknown_member:' + member_index.to_s}}"
+      @stack.push "#{stack_top}.#{type.fetch(member_index){'unknown_member:' + member_index.to_s}}"
     when 'extend'
       operand = @stack.pop
       var_name = operand.split('[')[0]

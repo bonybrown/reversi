@@ -33,8 +33,8 @@ globals = GlobalFinder.new(ARGV[0]+ '.42m')
 parser = Parser.new(options[:output], globals)
 
 
-ARGF.each_line do |l|
-  parser.parse(l)
+ARGF.each_line.with_index do |l,i|
+  parser.parse(l,i)
 end
 
 
