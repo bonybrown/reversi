@@ -120,7 +120,7 @@ def read_function_body(f)
         puts "\tline=#{lineno}  offset=#{offset}"
       end
     when 5
-      puts "[5] Exception table??? size = #{size}"
+      puts "[5] Exception table size = #{size}"
       size.times do 
         ip,cl,act,jmp = f.read(6).unpack("S<CCS<")
         puts "\t fromip=#{ip} cl=#{cl} act=#{act} jmpip=#{jmp}"
@@ -155,12 +155,10 @@ File.open(ARGV[0], 'rb') do |f|
     table = get_bytes(f,1)[0]
     puts "TABLE: #{table}"
     case table
-    when 10
-      read_package_table(f)
-    when 1 # types
-      read_types_table(f)
     when 0 # constants
       read_constants_table(f)
+    when 1 # types
+      read_types_table(f)
     when 2 # globals
       read_globals_table(f)
     when 3 # module vars
