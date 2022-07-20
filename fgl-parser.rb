@@ -13,6 +13,8 @@ class FglParser
           "##{index} String"
         when 2
           "##{index} Char[#{size - 1}]"
+        when 4
+          "##{index} DateTime(#{size >> 8},#{ size & 255})"
         when 7
           "##{index} Varchar[#{size - 1}]"
         when 9
@@ -28,12 +30,14 @@ class FglParser
         when 17
           "##{index} Array[#{size}]"
         else
-          "##{index} TBD"
+          "##{index} TBD type id=#{type_id} (#{size >> 8},#{ size & 255})"
         end
       end
     end
+    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table); end
     class File
-      attr_reader :types, :functions, :constants, :annotations, :globals
+      attr_reader :types, :functions, :constants, :annotations, :globals, :module_vars, :packages
+      attr_accessor :module_name, :build, :source
 
       def initialize
         @types = []
@@ -41,6 +45,8 @@ class FglParser
         @constants = []
         @annotations = []
         @globals = []
+        @module_vars = []
+        @packages = []
       end
 
       def print_types
@@ -69,27 +75,27 @@ class FglParser
       @file = f
       four_js = f.read(4)
       raise StandardError, "Not a 4js file" if four_js != "JJJJ"
-      pp read_bytes(3)
+      raise NotImplementedError, "Unexpected bytes after JJJJ header" if read_bytes(3) != [0,16,0]
       loop do
         table = read_byte
-        puts "TABLE: #{table}"
         case table
         when 1 # module name
-          puts module_name = read_string
+          @code.module_name = read_string
         when 6 # build version
-          puts build = read_string
+          @code.build = read_string
         when 8 # source ref
-          puts source = read_string
+          @code.source = read_string
         when 9 # package refs?
           read_package_table
         when 10 # end
           read_tag_table
           break
+        else
+          raise NotImplementedError, "Unexpected table type #{table} at offset #{@file.pos} of #{@filename}"
         end
       end
       loop do
         table = read_byte
-        puts "TABLE: #{table}"
         case table
         when 0 # constants
           read_constants_table
@@ -98,13 +104,15 @@ class FglParser
         when 2 # globals
           read_globals_table
         when 3 # module vars
-          read_globals_table
+          read_module_var_table
         when 4 # function table
           read_function_table
         when 5 #function
           read_function_body
         when 11 #end
           break
+        else
+          raise NotImplementedError, "Unexpected table type #{table} at offset #{@file.pos} of #{@filename}"
         end
       end
     end
@@ -132,7 +140,6 @@ class FglParser
 
   def read_types_table
     entries = read_word
-    puts "type entries: #{entries}"
     entries.times do |i|
       name = ''
       kind = read_word
@@ -140,7 +147,8 @@ class FglParser
       if kind == 18
         name = read_string
         type_def.name = name
-        pp read_bytes(2)
+        unknown = read_word
+        raise NotImplementedError, "Unexpected word #{unknown} on type 18 offset #{@file.pos} of #{@filename}" if unknown != 0
         next
       end
 
@@ -190,11 +198,20 @@ class FglParser
     end
   end
 
+  def read_module_var_table
+    entries = read_word
+    entries.times do
+      name = read_string
+      type_index = read_word
+      unknown = read_word
+      @code.module_vars << FglCode::Variable.new(name, type_index)
+    end
+  end
+
   def read_package_table
     entries = read_word
-    puts "package entries: #{entries}"
     entries.times do
-      puts "\t#{read_string}"
+      @code.packages << read_string
     end
   end
 
@@ -209,51 +226,60 @@ class FglParser
 
   def read_function_table
     entries = read_word
-    puts "functions entries: #{entries}"
     entries.times do
-      puts "\t#{read_string} #{read_bytes(4)} "
+      name = read_string
+      arg_count = read_word
+      return_count = read_word
+      @code.functions[name] = FglCode::Function.new(name, arg_count, return_count)
     end
   end
 
   def read_function_body
-    puts "FUNCTION: #{read_string}"
+    name = read_string
+    function_def = @code.functions.fetch(name) do
+      @code.functions[name] = FglCode::Function.new(name)
+    end
     loop do
       type = read_byte
       break if type == 6
-      size = read_word
       case type
       when 0
-        puts "[0] PARAMETERS IN?? size = #{size}"
-        pp read_bytes(3)
+        arg_count = read_word
+        unknown = read_byte
+        return_count = read_word
+        raise NotImplementedError, 'expected unknown byte to eq 1' if unknown != 1
+        function_def.arg_count = arg_count
+        function_def.return_count = return_count
       when 1
-        puts "[1] ??? size = #{size}"
-        pp read_bytes(size)
+        raise NotImplementedError, "expected table type 1 in read_function_body at offset #{@file.pos} of #{@filename}"
       when 2
-        puts "[2] code size = #{size}"
+        size = read_word
         ops = read_bytes(size)
-        ops.each do |code|
-          printf("%02x ", code)
-        end
+        function_def.code = ops
         puts
       when 3
-        puts "[3] locals size = #{size}"
+        size = read_word
+        function_def.locals = []
         size.times do
           name = read_string
-          type_info = read_bytes(4)
-          puts "\t#{name} #{type_info.inspect}"
+          type_index = read_word
+          unknown = read_word
+          function_def.locals << FglCode::Variable.new(name, type_index)
         end
       when 4
-        puts "[4] src map size = #{size}"
+        size = read_word
+        function_def.source_map = []
         size.times do
           lineno = read_word
           offset = read_word
-          puts "\tline=#{lineno}  offset=#{offset}"
+          function_def.source_map << {ip: offset, line: lineno}
         end
       when 5
-        puts "[5] Exception table size = #{size}"
+        size = read_word
+        function_def.exception_table = []
         size.times do
           ip, cl, act, jmp = @file.read(6).unpack("S<CCS<")
-          puts "\t fromip=#{ip} cl=#{cl} act=#{act} jmpip=#{jmp}"
+          function_def.exception_table << {ip: ip, cl: cl, act: act, jmp: jmp}
         end
       end
     end
@@ -261,5 +287,5 @@ class FglParser
 end
 
 x = FglParser.new(ARGV[0]).parse
-pp x
+#pp x
 x.print_types
