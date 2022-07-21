@@ -3,10 +3,27 @@ require "stringio"
 
 class FglParser
   module FglCode
-    class Constant < Struct.new(:value, :type_index); end
+    class Constant < Struct.new(:value, :type_index)
+      def to_s
+        if type_index == 0
+          "\"#{value}\""
+        else
+          # numeric
+          if value[0] == '.' # seems numeric constants can be specified without leading zero
+            '0' + value
+          else
+            value
+          end
+        end
+      end
+    end
     class Annotation < Struct.new(:key, :value); end
-    class Variable < Struct.new(:name, :type_index); end
-    class TypeDef < Struct.new(:type_id, :index, :name, :size, :array_type, :structure, :annotations)
+    class Variable < Struct.new(:name, :type_index, :member_of)
+      def to_s
+        name
+      end
+    end
+    class TypeDef < Struct.new(:type_id, :index, :type_name, :size, :array_type, :structure, :annotations)
       def name
         case type_id
         when 0
@@ -29,12 +46,15 @@ class FglParser
           "##{index} Struct"
         when 17
           "##{index} Array[#{size}]"
+        when 18
+          "##{index} #{type_name}"
         else
           "##{index} TBD type id=#{type_id} (#{size >> 8},#{ size & 255})"
         end
       end
     end
-    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table); end
+    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table, :arg_list)
+    end
     class File
       attr_reader :types, :functions, :constants, :annotations, :globals, :module_vars, :packages
       attr_accessor :module_name, :build, :source
@@ -49,15 +69,28 @@ class FglParser
         @packages = []
       end
 
+      def add_global(g)
+        raise ArgumentError, 'add_global requires a Variable instance' unless g.is_a?(Variable)
+        function_index = g.type_index
+        type = types[function_index]
+        raise ArgumentError, "Unknown type id #{function_index}" unless type
+        globals << g
+        if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
+          type.structure.each do |member|
+            globals << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
+          end
+        end
+      end
+
       def print_types
-        @types.each do |t|
+        @types.each_with_index do |t,i|
           case t.type_id
           when 16
-            puts "#{t.name} OF \n\t#{t.structure.map{|s| s.name + ' ' + @types[s.type_index].name}.join("\n\t")}"
+            puts "#{i}\t#{t.name} OF \n\t#{t.structure.map{|s| s.name + ' ' + @types[s.type_index].name}.join("\n\t")}"
           when 17
-            puts "#{t.name} OF #{@types[t.array_type].name}"
+            puts "#{i}\t#{t.name} OF #{@types[t.array_type].name}"
           else
-            puts t.name
+            puts "#{i}\t#{t.name}"
           end
         end
       end
@@ -140,15 +173,17 @@ class FglParser
 
   def read_types_table
     entries = read_word
-    entries.times do |i|
+    entries.times do |index|
       name = ''
       kind = read_word
-      type_def = FglCode::TypeDef.new(kind, i)
+      type_def = FglCode::TypeDef.new(kind, index)
       if kind == 18
         name = read_string
-        type_def.name = name
+        type_def.type_name = name
+        type_def.size = 8 # fglrun -r says cursors are size 8
         unknown = read_word
         raise NotImplementedError, "Unexpected word #{unknown} on type 18 offset #{@file.pos} of #{@filename}" if unknown != 0
+        @code.types << type_def
         next
       end
 
@@ -194,7 +229,7 @@ class FglParser
       name = read_string
       type_index = read_word
       unknown = read_word
-      @code.globals << FglCode::Variable.new(name, type_index)
+      @code.add_global FglCode::Variable.new(name, type_index)
     end
   end
 
@@ -268,11 +303,11 @@ class FglParser
         end
       when 4
         size = read_word
-        function_def.source_map = []
+        function_def.source_map = {}
         size.times do
           lineno = read_word
           offset = read_word
-          function_def.source_map << {ip: offset, line: lineno}
+          function_def.source_map[offset] = lineno
         end
       when 5
         size = read_word
@@ -285,7 +320,3 @@ class FglParser
     end
   end
 end
-
-x = FglParser.new(ARGV[0]).parse
-#pp x
-x.print_types
