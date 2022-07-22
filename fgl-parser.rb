@@ -23,6 +23,11 @@ class FglParser
         name
       end
     end
+    class GlobalVariable < Struct.new(:name, :type_index, :member_of)
+      def to_s
+        '$' + name
+      end
+    end
     class TypeDef < Struct.new(:type_id, :index, :type_name, :size, :array_type, :structure, :annotations)
       def name
         case type_id
@@ -70,14 +75,14 @@ class FglParser
       end
 
       def add_global(g)
-        raise ArgumentError, 'add_global requires a Variable instance' unless g.is_a?(Variable)
+        raise ArgumentError, 'add_global requires a Variable instance' unless g.is_a?(GlobalVariable)
         function_index = g.type_index
         type = types[function_index]
         raise ArgumentError, "Unknown type id #{function_index}" unless type
         globals << g
         if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
           type.structure.each do |member|
-            globals << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
+            globals << GlobalVariable.new("#{g.name}.#{member.name}", member.type_index, g)
           end
         end
       end
@@ -229,7 +234,7 @@ class FglParser
       name = read_string
       type_index = read_word
       unknown = read_word
-      @code.add_global FglCode::Variable.new(name, type_index)
+      @code.add_global FglCode::GlobalVariable.new(name, type_index)
     end
   end
 

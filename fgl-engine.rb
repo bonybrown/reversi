@@ -146,7 +146,7 @@ class FglEngine
     end
   end
 
-  def declare_variable(g)
+  def declare_variable(g, indent = '')
     type = @file.types[g.type_index]
     if type.nil?
       raise ArgumentError, "What is #{g.inspect}" 
@@ -154,17 +154,26 @@ class FglEngine
     return if g.member_of
     if type.structure
       members = type.structure.map{|m| ":#{m.name}" }
-      puts "class TypeDef_#{g.name} < Struct.new(#{members.join(', ')}) ; end"
-      puts "#{g.name} = TypeDef_#{g.name}.new"
+      puts "#{indent}#{g} = TypeDef_#{type.index}.new"
     elsif type.array_type
-      puts "#{g.name} = Array.new(#{type.size},nil)"
+      puts "#{indent}#{g} = Array.new(#{type.size},nil)"
     else
-      puts "#{g.name} = nil # #{type.name}"
+      puts "#{indent}#{g} = nil # #{type.name}"
     end
-end
+  end
+
+  def declare_types
+    @file.types.each do |type|
+      if type.structure
+        members = type.structure.map{|m| ":#{m.name}" }
+        puts "class TypeDef_#{type.index} < Struct.new(#{members.join(', ')}) ; end"
+      end
+    end
+  end
 
   def display_code_header
     puts "require 'goto'"
+    declare_types
     puts "# GLOBALS"
     @file.globals.each do |g|
       declare_variable(g)
@@ -180,7 +189,11 @@ end
     
     function.arg_list ||= []
     puts "def #{@function.name}(#{function.arg_list.join(', ')})"
-    locals = function.locals.each{|l| puts "\t#{l.name} = nil" unless function.arg_list.include?(l.name) }
+    function.locals.each do |l|
+      unless function.arg_list.include?(l.name)
+        declare_variable(l,"\t")
+      end
+    end
     
     puts "\tframe_start"
     code = function.code
@@ -252,8 +265,10 @@ end
 
   def vm_pushGlb(args)
     i = args_to_index(args)
-    push @file.globals[i]
-    @tos_type = @file.globals[i].type_index
+    global = @file.globals[i]
+    raise ArgumentError, "Did not find Global #{i} at ip=#{@current_ip}" if global.nil?
+    push global
+    @tos_type = global.type_index
   end
 
   def vm_pushLoc(args)
@@ -281,8 +296,8 @@ end
     case name
     when 'rts_doCat'
       dest = call_args[0].to_s
-      src_ary = call_args[1]
-      push "#{dest} = #{src_ary}.join"
+      src_ary = call_args[1].map{|a| a.to_s}.join(', ')
+      push "#{dest} = [#{src_ary}].join"
     when 'rts_forInit'
       #push "#{name}(#{call_args.join(', ')})"
       i = call_args[0]
@@ -296,23 +311,35 @@ end
   end
 
   def vm_call1(args)
+    vm_callN(args)
+  end
+
+  def vm_callN(args)
     function_index = args_to_index(args)
     function = @file.functions.values[function_index]
     name = function.name
-    call_args = pop(function.arg_count)
+    if function.arg_count == 1
+      call_args = pop
+    else
+      call_args = pop(function.arg_count)
+    end
     if call_args.is_a?(Array)
       call_args = call_args.map{|a| a.to_s }.join(', ')
     end
-    expression = "#{name}(#{call_args})"
+    if name == 'rts_sql_intovars'
+      expression = "lambda{|d|#{call_args} = d}"
+    else
+      expression = "#{name}(#{call_args})"
+    end
     push expression
   end
 
+  # loads returned values from a function into variables
   def vm_load(args)
     count = args_to_index(args)
-    dest = pop
-    load_args = pop(count)
-    src_ary = load_args.map{|a| a.to_s}
-    push "#{dest} = #{load_args.join(', ')} " # WARNING vm_load - possibly not correct
+    dest = pop(count).map{|a| a.to_s}.join(', ')
+    source = pop
+    push "#{dest} = #{source}"
   end
 
 
@@ -325,9 +352,19 @@ end
 
   def vm_strSub2(args)
     end_s = pop
+    if end_s.is_a?(FglParser::FglCode::Constant)
+      end_s = end_s.to_s.to_i - 1
+    else
+      end_s = "#{end_s} -1"
+    end
     start_s = pop
+    if start_s.is_a?(FglParser::FglCode::Constant)
+      start_s = start_s.to_s.to_i - 1
+    else
+      start_s = "#{start_s} -1"
+    end
     string = pop
-    expression = "#{string}[#{start_s},#{end_s}]"
+    expression = "#{string}.slice(#{start_s},#{end_s})"
     push expression
   end
 
@@ -379,6 +416,10 @@ end
     when 4 #rts_Op1Not
       rhs = pop
       expression = "!#{rhs}"
+      push expression
+    when 6 # rts_Op1UMi
+      rhs = pop
+      expression = "-#{rhs}"
       push expression
     when 7 #rts_Op2And
       rhs = pop
@@ -440,10 +481,28 @@ end
       lhs = pop
       expression = "(#{lhs} + #{rhs})"
       push expression
+    when 25 # rts_Op2Test - SOMETHING ABOUT THIS IS NOT RIGHT
+      rhs = pop
+      lhs = pop
+      #push lhs
+      expression = "(#{lhs} == #{rhs})"
+      push expression
+    when 26 # rts_Op2Using
+      format = pop
+      data = pop
+      expression = "(format_using(#{format},#{data}))"
+      push expression
     when 27 #rts_OpFor
       loop_end = pop
       loop_index = pop
       expression = "(#{loop_index}+=1 ; #{loop_end} - #{loop_index})"
+      push expression
+      :indent_down
+    when 28 # rts_OpForStep
+      loop_end = pop
+      loop_step = pop
+      loop_index = pop
+      expression = "(#{loop_index}+=#{loop_step} ; #{loop_end} - #{loop_index})"
       push expression
       :indent_down
     else
@@ -454,10 +513,10 @@ end
   def vm_genList(args)
     list_size = args_to_index(args)
     items = pop(list_size)
-    if items.is_a?(Array)
-      items = items.map{|a| a.to_s }.join(', ')
-    end
-    push "[#{items}]"
+    # if items.is_a?(Array)
+    #   items = [] #items.map{|a| a.to_s }.join(', ')
+    # end
+    push items
   end
 
   def vm_goto(args)
