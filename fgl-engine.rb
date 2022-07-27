@@ -275,7 +275,6 @@ class FglEngine
     i = args_to_index(args)
     local = @function.locals[i]
     if local.nil?
-      pp @function
       raise ArgumentError, "Did not find Local #{i} at ip=#{@current_ip}." 
     end
     push local
@@ -284,8 +283,12 @@ class FglEngine
 
   def vm_pushMod(args)
     i = args_to_index(args)
-    push @file.module_vars[i]
-    @tos_type = @file.module_vars[i].type_index
+    module_var =  @file.module_vars[i]
+    if module_var.nil?
+      raise ArgumentError, "Did not find Module Variable #{i} at ip=#{@current_ip}." 
+    end
+    push module_var
+    @tos_type = module_var.type_index
   end
 
   def vm_pushNull(args)
@@ -353,6 +356,12 @@ class FglEngine
     string = pop
     expression = "#{string}[#{subscript}]"
     push expression
+  end
+
+  # I _think_ strSubL is used when the string sub is the LHS of
+  # an assignment? In ruby, it works, so just call strSub
+  def vm_strSubL(args)
+    vm_strSub(args)
   end
 
   def vm_strSub2(args)
@@ -451,6 +460,16 @@ class FglEngine
       lhs = pop
       expression = "(#{lhs} > #{rhs})"
       push expression
+    when 13 #rts_Op2IntMi
+      rhs = pop
+      lhs = pop
+      expression = "#{lhs} - #{rhs}"
+      push expression
+    when 15 # rts_Op2IntPl
+      rhs = pop
+      lhs = pop
+      expression = "(#{lhs} + #{rhs})"
+      push expression
     when 16 #rts_Op2Le
       rhs = pop
       lhs = pop
@@ -465,6 +484,11 @@ class FglEngine
       rhs = pop
       lhs = pop
       expression = "#{lhs} - #{rhs}"
+      push expression
+    when 19 #rts_Op2Mo
+      rhs = pop
+      lhs = pop
+      expression = "#{lhs} % #{rhs}"
       push expression
     when 20 #rts_Op2Mu
       rhs = pop

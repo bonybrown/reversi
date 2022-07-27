@@ -100,6 +100,19 @@ class FglParser
         end
       end
 
+      def add_module_var(g)
+        raise ArgumentError, 'add_module_var requires a Variable instance' unless g.is_a?(Variable)
+        function_index = g.type_index
+        type = types[function_index]
+        raise ArgumentError, "Unknown type id #{function_index}" unless type
+        module_vars << g
+        if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
+          type.structure.each do |member|
+            module_vars << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
+          end
+        end
+      end
+
       def add_function(f)
         @functions[f.name] = f
         f.fgl_module = self
@@ -264,7 +277,7 @@ class FglParser
       name = read_string
       type_index = read_word
       unknown = read_word
-      @code.module_vars << FglCode::Variable.new(name, type_index)
+      @code.add_module_var FglCode::Variable.new(name, type_index)
     end
   end
 
@@ -297,7 +310,7 @@ class FglParser
   def read_function_body
     name = read_string
     function_def = @code.functions.fetch(name) do
-      @code.functions[name] = FglCode::Function.new(name)
+      @code.add_function FglCode::Function.new(name)
     end
     loop do
       type = read_byte
@@ -316,7 +329,6 @@ class FglParser
         size = read_word
         ops = read_bytes(size)
         function_def.code = ops
-        puts
       when 3
         size = read_word
         size.times do
