@@ -133,16 +133,22 @@ class FglEngine
         @ip += argc
       end
       result = send(OPCODES.dig(instruction, :name), args)
-      if lines[@ip]
-        if @current_line != lines[@ip]
-            @indent -=1 if result == :indent_down
-            contexts.each do |c|
-              c[:indent] = @indent
-              @result[c[:ip]] = c
-            end
-            @indent +=1 if result == :indent_up
-        end
+      if result == :statement
+        context = @context_stack.pop
+        #puts "STATEMENT #{context}"
+        #pp @context_stack
+        @result[context[:ip]] = context unless context.nil?
       end
+      # if lines[@ip] 
+      #   if @current_line != lines[@ip] 
+      #       @indent -=1 if result == :indent_down
+      #       contexts.each do |c|
+      #         c[:indent] = @indent
+      #         @result[c[:ip]] = c
+      #       end
+      #       @indent +=1 if result == :indent_up
+      #   end
+      # end
     end
   end
 
@@ -248,13 +254,22 @@ class FglEngine
   def vm_assF(args)
     rhs = pop
     lhs = pop
-    push "#{lhs} = #{rhs}"
+    expression = "#{lhs} = #{rhs}"
+    if lhs.is_a?(FglParser::FglCode::Variable)
+      type_id = @file.types[lhs.type_index].type_id
+      if type_id == 10 || type_id == 9
+        expression += ".to_i"
+      end
+    end
+    push expression
+    :statement
   end
 
   def vm_assR(args)
     rhs = pop
     lhs = pop
     push "#{rhs} = #{lhs} # assR ??"
+    :statement
   end
 
   def vm_pushCon(args)
@@ -306,6 +321,7 @@ class FglEngine
       dest = call_args[0].to_s
       src_ary = call_args[1].map{|a| a.to_s}.join(', ')
       push "#{dest} = [#{src_ary}].join"
+      :statement
     when 'rts_forInit'
       #push "#{name}(#{call_args.join(', ')})"
       i = call_args[0]
@@ -313,8 +329,14 @@ class FglEngine
       e = call_args[3]
       push "(#{i} = #{s}; #{e} - #{i})"
       :indent_up
+    when 'rts_OpPop'
+      statement = "# rts_OpPop(1) called, stack size=#{@context_stack.count}"
+      @context_stack.pop
+      push statement
+      :statement
     else
       push "#{name}(#{call_args.join(', ')})"
+      :statement
     end
   end
 
@@ -323,6 +345,7 @@ class FglEngine
   end
 
   def vm_callN(args)
+    empty_array_arg = false
     function_index = args_to_index(args)
     function = @file.functions.values[function_index]
     name = function.name
@@ -332,10 +355,15 @@ class FglEngine
       call_args = pop(function.arg_count)
     end
     if call_args.is_a?(Array)
+      empty_array_arg = call_args.empty?
       call_args = call_args.map{|a| a.to_s }.join(', ')
     end
     if name == 'rts_sql_intovars'
-      expression = "lambda{|d|#{call_args} = d}"
+      if empty_array_arg
+        expression = 'nil'
+      else
+        expression = "lambda{|d|#{call_args} = d}"
+      end
     else
       expression = "#{name}(#{call_args})"
     end
@@ -354,7 +382,7 @@ class FglEngine
   def vm_strSub(args)
     subscript = pop
     string = pop
-    expression = "#{string}[#{subscript}]"
+    expression = "#{string}[#{subscript} - 1]"
     push expression
   end
 
@@ -378,7 +406,7 @@ class FglEngine
       start_s = "#{start_s} -1"
     end
     string = pop
-    expression = "#{string}.slice(#{start_s},#{end_s})"
+    expression = "#{string}[#{start_s}..#{end_s}]"
     push expression
   end
 
@@ -417,7 +445,7 @@ class FglEngine
     case i
     when 0 #rts_Op1Clipp
       rhs = pop
-      expression = "#{rhs}.strip"
+      expression = "#{rhs}.to_s.strip"
       push expression
     when 2 #rts_Op1IsNotNull
       rhs = pop
@@ -513,7 +541,7 @@ class FglEngine
     when 25 # rts_Op2Test - SOMETHING ABOUT THIS IS NOT RIGHT
       rhs = pop
       lhs = pop
-      #push lhs
+      push lhs
       expression = "(#{lhs} == #{rhs})"
       push expression
     when 26 # rts_Op2Using
@@ -554,6 +582,7 @@ class FglEngine
     label = "l_#{target_ip}"
     @labels[target_ip] = label
     push "goto :#{label}"
+    :statement
   end
 
   def vm_jpz(args)
@@ -563,6 +592,7 @@ class FglEngine
     label = "l_#{target_ip}"
     @labels[target_ip] = label
     push "if ! #{expression} then goto :#{label} ; end"
+    :statement
   end
 
   def vm_jnz(args)
@@ -572,6 +602,7 @@ class FglEngine
     label = "l_#{target_ip}"
     @labels[target_ip] = label
     push "if #{expression} then goto :#{label} ; end"
+    :statement
   end
 
   def vm_jpc(args)
@@ -581,6 +612,7 @@ class FglEngine
     label = "l_#{target_ip}"
     @labels[target_ip] = label
     push "if #{expression} < 0 then goto :#{label} ; end"
+    :statement
   end
 
   def vm_jnc(args)
@@ -590,6 +622,7 @@ class FglEngine
     label = "l_#{target_ip}"
     @labels[target_ip] = label
     push "if #{expression} >= 0 then goto :#{label} ; end"
+    :statement
   end
 
   def vm_pushInt(args)
@@ -601,11 +634,11 @@ class FglEngine
     list_size = args_to_index(args)
     rets = pop(list_size).map{|a| a.to_s}
     push "return #{rets.join(', ')}"
-    :return
+    :statement
   end
 
   def vm_ret(args)
-    :return
+    :statement
   end
 
   def vm_popArg(args)

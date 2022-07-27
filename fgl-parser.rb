@@ -23,7 +23,7 @@ class FglParser
         name
       end
     end
-    class GlobalVariable < Struct.new(:name, :type_index, :member_of)
+    class GlobalVariable < Variable
       def to_s
         '$' + name
       end
