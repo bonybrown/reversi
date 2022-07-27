@@ -273,8 +273,13 @@ class FglEngine
 
   def vm_pushLoc(args)
     i = args_to_index(args)
-    push @function.locals[i]
-    @tos_type = @function.locals[i].type_index
+    local = @function.locals[i]
+    if local.nil?
+      pp @function
+      raise ArgumentError, "Did not find Local #{i} at ip=#{@current_ip}." 
+    end
+    push local
+    @tos_type = local.type_index
   end
 
   def vm_pushMod(args)

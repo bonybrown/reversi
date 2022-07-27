@@ -58,9 +58,22 @@ class FglParser
         end
       end
     end
-    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table, :arg_list)
+    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table, :arg_list, :fgl_module)
+      def add_local(g)
+        raise ArgumentError, 'add_local requires a Variable instance' unless g.is_a?(Variable)
+        function_index = g.type_index
+        type = fgl_module.types[function_index]
+        raise ArgumentError, "Unknown type id #{function_index}" unless type
+        self.locals ||= []
+        self.locals << g
+        if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
+          type.structure.each do |member|
+            self.locals << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
+          end
+        end
+      end
     end
-    class File
+    class FglModule
       attr_reader :types, :functions, :constants, :annotations, :globals, :module_vars, :packages
       attr_accessor :module_name, :build, :source
 
@@ -75,7 +88,7 @@ class FglParser
       end
 
       def add_global(g)
-        raise ArgumentError, 'add_global requires a Variable instance' unless g.is_a?(GlobalVariable)
+        raise ArgumentError, 'add_global requires a GlobalVariable instance' unless g.is_a?(GlobalVariable)
         function_index = g.type_index
         type = types[function_index]
         raise ArgumentError, "Unknown type id #{function_index}" unless type
@@ -85,6 +98,13 @@ class FglParser
             globals << GlobalVariable.new("#{g.name}.#{member.name}", member.type_index, g)
           end
         end
+      end
+
+      def add_function(f)
+        @functions[f.name] = f
+        f.fgl_module = self
+        f.locals ||= []
+        f
       end
 
       def print_types
@@ -108,7 +128,7 @@ class FglParser
   end
 
   def parse
-    @code = FglCode::File.new
+    @code = FglCode::FglModule.new
     File.open(@filename, "rb") do |f|
       @file = f
       four_js = f.read(4)
@@ -270,7 +290,7 @@ class FglParser
       name = read_string
       arg_count = read_word
       return_count = read_word
-      @code.functions[name] = FglCode::Function.new(name, arg_count, return_count)
+      @code.add_function FglCode::Function.new(name, arg_count, return_count)
     end
   end
 
@@ -299,12 +319,11 @@ class FglParser
         puts
       when 3
         size = read_word
-        function_def.locals = []
         size.times do
           name = read_string
           type_index = read_word
           unknown = read_word
-          function_def.locals << FglCode::Variable.new(name, type_index)
+          function_def.add_local FglCode::Variable.new(name, type_index)
         end
       when 4
         size = read_word
