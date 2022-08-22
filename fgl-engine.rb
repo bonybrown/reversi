@@ -71,6 +71,7 @@ class FglEngine
     @context_stack = []
     @ip = 0
     @current_ip = nil
+    @case_statement_start_ip = -1
   end
 
   def push(d)
@@ -132,7 +133,16 @@ class FglEngine
         args = code.slice(@ip,argc)
         @ip += argc
       end
-      result = send(OPCODES.dig(instruction, :name), args)
+      instruction_name = OPCODES.dig(instruction, :name)
+      if instruction_name == :vm_jpe
+        if @case_statement_start_ip == -1
+          @case_statement_start_ip = @current_ip
+        end
+      else
+        @case_statement_start_ip = -1
+      end
+
+      result = send(instruction_name, args)
       if result == :statement
         context = @context_stack.pop
         #puts "STATEMENT #{context}"
@@ -459,6 +469,10 @@ class FglEngine
       rhs = pop
       expression = "!#{rhs}"
       push expression
+    when 5 # rts_Op1Spaces
+      rhs = pop
+      expression = "(' ' * #{rhs})"
+      push expression
     when 6 # rts_Op1UMi
       rhs = pop
       expression = "-#{rhs}"
@@ -605,6 +619,22 @@ class FglEngine
     :statement
   end
 
+  def vm_jpe(args)
+    expr_capture = ""
+    test_variable = "tmp_#{@case_statement_start_ip}"
+    if @case_statement_start_ip == @current_ip
+      # capture last expression value with single underscore
+      expr_capture = "#{test_variable} = _ ;"
+    end
+    compare = args_to_signed([args[0],args[1]])
+    offset = args_to_signed(args[2..])
+    target_ip = @ip + offset 
+    label = "l_#{target_ip}"
+    @labels[target_ip] = label
+    push "#{expr_capture} if #{test_variable} == #{compare} then goto :#{label} ; end"
+    :statement
+  end
+
   def vm_jpc(args)
     offset = args_to_signed(args)
     expression = pop
@@ -627,7 +657,7 @@ class FglEngine
 
   def vm_pushInt(args)
     int = args_to_signed(args)
-    push int    
+    push int
   end
 
   def vm_retAll(args)
