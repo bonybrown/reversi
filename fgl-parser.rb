@@ -29,10 +29,55 @@ class FglParser
       end
     end
     class TypeDef < Struct.new(:type_id, :index, :type_name, :size, :array_type, :structure, :annotations)
+      def assignment_expression(expression, expression_type)
+        return expression if expression_type.nil?
+
+        other_type_id = expression_type.type_id
+        case type_id
+        when 0
+          return "#{expression}.to_s" unless [0,2,7].include?(other_type_id)
+        when 1
+          raise ArgumentError, "not possible to assign to Struct"
+        when 2
+          return "#{expression}.to_s" unless [0,2,7].include?(other_type_id)
+        when 4
+          return expression
+        when 7
+          return "#{expression}.to_s" unless [0,2,7].include?(other_type_id)
+        when 9
+          return "#{expression}.to_i" unless [9,10].include?(other_type_id)
+        when 10
+          return "#{expression}.to_i" unless [9,10].include?(other_type_id)
+        when 11
+          return "Date.parse(#{expression})" if [0,2,7].include?(other_type_id)
+          return expression if other_type_id == 11
+          raise ArgumentError, "cannot assign to date from type id #{other_type_id}" 
+        when 14
+          prec =  size & 255
+          return expression if other_type_id == 14 && (expression_type.size & 255) == prec
+          return "BigDecimal(#{expression}, #{prec})"
+        when 16
+          raise ArgumentError, "not possible to assign to Struct"
+        when 17
+          raise ArgumentError, "not possible to assign to Struct"
+        when 18
+          raise ArgumentError, "not possible to assign to Struct"
+        end
+        return expression
+      end
+      def class_name
+        if type_name.nil?
+          "Type_#{index}"
+        else
+          "Type_#{type_name.tr(':.','__')}"
+        end
+      end
       def name
         case type_id
         when 0
           "##{index} String"
+        when 1
+          "##{index} Struct #{type_name}"
         when 2
           "##{index} Char[#{size - 1}]"
         when 4
@@ -58,7 +103,7 @@ class FglParser
         end
       end
     end
-    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table, :arg_list, :fgl_module)
+    class Function < Struct.new(:name, :arg_count, :return_count, :locals, :code, :source_map, :exception_table, :arg_list, :fgl_module, :signature)
       def add_local(g)
         raise ArgumentError, 'add_local requires a Variable instance' unless g.is_a?(Variable)
         function_index = g.type_index
@@ -93,11 +138,11 @@ class FglParser
         type = types[function_index]
         raise ArgumentError, "Unknown type id #{function_index}" unless type
         globals << g
-        if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
-          type.structure.each do |member|
-            globals << GlobalVariable.new("#{g.name}.#{member.name}", member.type_index, g)
-          end
-        end
+        # if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
+        #   type.structure.each do |member|
+        #     globals << GlobalVariable.new("#{g.name}.#{member.name}", member.type_index, g)
+        #   end
+        # end
       end
 
       def add_module_var(g)
@@ -106,11 +151,11 @@ class FglParser
         type = types[function_index]
         raise ArgumentError, "Unknown type id #{function_index}" unless type
         module_vars << g
-        if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
-          type.structure.each do |member|
-            module_vars << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
-          end
-        end
+        # if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
+        #   type.structure.each do |member|
+        #     module_vars << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
+        #   end
+        # end
       end
 
       def add_function(f)
@@ -146,7 +191,8 @@ class FglParser
       @file = f
       four_js = f.read(4)
       raise StandardError, "Not a 4js file" if four_js != "JJJJ"
-      raise NotImplementedError, "Unexpected bytes after JJJJ header" if read_bytes(3) != [0,16,0]
+      possibly_version_number = read_bytes(3)
+      raise NotImplementedError, "Unexpected bytes after JJJJ header" if possibly_version_number != [0,16,0] && possibly_version_number != [0,29,0]
       loop do
         table = read_byte
         case table
@@ -161,6 +207,11 @@ class FglParser
         when 10 # end
           read_tag_table
           break
+        when 16 # unknown type, assuming size is next byte, then read N bytes to next table entry
+          $stderr.puts "handling table type 16 - unknown"
+          count = read_byte
+          $stderr.puts "reading #{count} bytes"
+          f.read(count+1)
         else
           raise NotImplementedError, "Unexpected table type #{table} at offset #{@file.pos} of #{@filename}"
         end
@@ -181,6 +232,10 @@ class FglParser
         when 5 #function
           read_function_body
         when 11 #end
+          break
+        when 12 # unknown, seems to be two bytes long
+          read_word
+        when 14 # unknown yet, perhaps EOF?
           break
         else
           raise NotImplementedError, "Unexpected table type #{table} at offset #{@file.pos} of #{@filename}"
@@ -210,11 +265,22 @@ class FglParser
   end
 
   def read_types_table
+    $stderr.puts "Reading types table at 0x#{@file.pos.to_s(16)}"
     entries = read_word
+    $stderr.puts "Reading #{entries} entries"
     entries.times do |index|
       name = ''
-      kind = read_word
-      type_def = FglCode::TypeDef.new(kind, index)
+      possibly_structure_indicator = read_byte
+      if possibly_structure_indicator == 1
+        kind = 1
+        type_def = FglCode::TypeDef.new(1, index)
+        type_def.type_name = read_string
+        read_byte
+      else
+        kind = read_byte
+        type_def = FglCode::TypeDef.new(kind, index)
+      end
+
       if kind == 18
         name = read_string
         type_def.type_name = name
@@ -233,7 +299,7 @@ class FglParser
         type_def.array_type = array_type
       end
 
-      if size > 0 && kind == 16
+      if size > 0 && ( kind == 16 || kind == 1)
         structure = []
         size.times do
           sub_kind = read_word
@@ -253,7 +319,9 @@ class FglParser
   end
 
   def read_constants_table
+    $stderr.puts "Reading constants table at 0x#{@file.pos.to_s(16)}"
     entries = read_word
+    $stderr.puts "Reading #{entries} entries"
     entries.times do
       type_index = read_byte
       value = read_string
@@ -262,7 +330,9 @@ class FglParser
   end
 
   def read_globals_table
+    $stderr.puts "Reading globals table at 0x#{@file.pos.to_s(16)}"
     entries = read_word
+    $stderr.puts "Reading #{entries} entries"
     entries.times do
       name = read_string
       type_index = read_word
@@ -272,11 +342,14 @@ class FglParser
   end
 
   def read_module_var_table
+    $stderr.puts "Reading module variables table at 0x#{@file.pos.to_s(16)}"
     entries = read_word
+    $stderr.puts "Reading #{entries} entries"
     entries.times do
       name = read_string
       type_index = read_word
       unknown = read_word
+      unknown_possibly_visibility = read_word
       @code.add_module_var FglCode::Variable.new(name, type_index)
     end
   end
@@ -298,11 +371,18 @@ class FglParser
   end
 
   def read_function_table
+    $stderr.puts "Reading function table at 0x#{@file.pos.to_s(16)}"
     entries = read_word
+    $stderr.puts "Reading #{entries} entries"
     entries.times do
+      package = read_string
       name = read_string
+      read_byte # unknown byte function
+      read_word # unknown word function
       arg_count = read_word
       return_count = read_word
+      read_word # unknown word
+      $stderr.puts "#{package}.#{name} P:#{arg_count} R:#{return_count}"
       @code.add_function FglCode::Function.new(name, arg_count, return_count)
     end
   end
@@ -314,13 +394,16 @@ class FglParser
     end
     loop do
       type = read_byte
-      break if type == 6
+      if type == 6
+        $stderr.puts "FUNCTION: #{function_def.name}#{function_def.signature} (#{function_def.arg_count},#{function_def.return_count})" 
+        break
+      end
       case type
       when 0
         arg_count = read_word
         unknown = read_byte
         return_count = read_word
-        raise NotImplementedError, 'expected unknown byte to eq 1' if unknown != 1
+        raise NotImplementedError, "expected unknown byte to eq 1, got #{unknown}  at offset #{@file.pos}" if unknown != 1
         function_def.arg_count = arg_count
         function_def.return_count = return_count
       when 1
@@ -352,6 +435,12 @@ class FglParser
           ip, cl, act, jmp = @file.read(6).unpack("S<CCS<")
           function_def.exception_table << {ip: ip, cl: cl, act: act, jmp: jmp}
         end
+      when 11
+        function_def.signature = read_string
+      when 14 # don't know what this is yet. fglrun -r output lists number field-references and java-field-references. Could be these?
+        size = read_word
+      else
+        raise "unhandled tag number #{type}"
       end
     end
   end

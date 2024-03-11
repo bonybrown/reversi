@@ -74,10 +74,14 @@ class FglEngine
     @case_statement_start_ip = -1
   end
 
-  def push(d)
-    context = {ip: @current_ip, line: @current_line, data: d}
+  def push(d, type = nil)
+    if type.nil? && d.respond_to?(:type_index)
+      type = @file.types[d.type_index]
+    end
+    context = {ip: @current_ip, line: @current_line, data: d, type: type}
     @context_stack.push(context)
   end
+  
   def pop(n=nil)
     if n.nil?
       context = @context_stack.pop
@@ -87,6 +91,15 @@ class FglEngine
       contexts.map{|c| c[:data]}
     end
   end
+
+  def pop_context(n=nil)
+    if n.nil?
+      context = @context_stack.pop
+    else
+      contexts = @context_stack.pop(n)
+    end
+  end
+
   def contexts
     @context_stack.pop(100)
   end
@@ -114,7 +127,6 @@ class FglEngine
     @context_stack = []
     @result = []
     @labels = []
-    @tos_type = nil
     code = @function.code
     lines = @function.source_map
     @current_line = nil
@@ -143,6 +155,10 @@ class FglEngine
       end
 
       result = send(instruction_name, args)
+      # HEAVY DEBUG
+      #puts 
+      #puts "At IP=#{@ip}, stack is:"
+      #@context_stack.map{|x| [x[:data], x[:type]]}.each{|i| puts "\t #{i}" }
       if result == :statement
         context = @context_stack.pop
         #puts "STATEMENT #{context}"
@@ -170,7 +186,7 @@ class FglEngine
     return if g.member_of
     if type.structure
       members = type.structure.map{|m| ":#{m.name}" }
-      puts "#{indent}#{g} = TypeDef_#{type.index}.new"
+      puts "#{indent}#{g} = #{type.class_name}.new"
     elsif type.array_type
       puts "#{indent}#{g} = Array.new(#{type.size},nil)"
     else
@@ -182,7 +198,7 @@ class FglEngine
     @file.types.each do |type|
       if type.structure
         members = type.structure.map{|m| ":#{m.name}" }
-        puts "class TypeDef_#{type.index} < Struct.new(#{members.join(', ')}) ; end"
+        puts "class #{type.class_name} < Struct.new(#{members.join(', ')}) ; end"
       end
     end
   end
@@ -204,7 +220,9 @@ class FglEngine
     
     
     function.arg_list ||= []
-    puts "def #{@function.name}(#{function.arg_list.join(', ')})"
+    puts "\n# FUNCTION"
+    puts "# #{@function.name}#{@function.signature}"
+    puts "def #{@function.name}(#{function.arg_list.reverse.join(', ')})"
     function.locals.each do |l|
       unless function.arg_list.include?(l.name)
         declare_variable(l,"\t")
@@ -225,9 +243,11 @@ class FglEngine
       if c
         print "#\tline #{c[:line]} (ip:#{c[:ip]})"
         print "\n"
-        print "\t\t"
-        print c[:data]
-        print "\n"
+        c[:data].each_line do |l|
+          print "\t\t"
+          print l.chomp
+          print "\n"
+        end
       end
     end
     puts "\tend" if in_label
@@ -262,16 +282,14 @@ class FglEngine
   end
 
   def vm_assF(args)
-    rhs = pop
-    lhs = pop
-    expression = "#{lhs} = #{rhs}"
-    if lhs.is_a?(FglParser::FglCode::Variable)
-      type_id = @file.types[lhs.type_index].type_id
-      if type_id == 10 || type_id == 9
-        expression += ".to_i"
-      end
-    end
-    push expression
+    rhs = pop_context
+    lhs = pop_context
+    rhs_type = rhs[:type]
+    lhs_type = lhs[:type]
+    rhs = rhs[:data]
+    lhs = lhs[:data]
+    expression = "#{lhs} = #{lhs_type.assignment_expression(rhs, rhs_type)}"
+    push expression, lhs_type
     :statement
   end
 
@@ -285,7 +303,6 @@ class FglEngine
   def vm_pushCon(args)
     i = args_to_index(args)
     push @file.constants[i]
-    @tos_type = @file.constants[i].type_index
   end
 
   def vm_pushGlb(args)
@@ -293,7 +310,6 @@ class FglEngine
     global = @file.globals[i]
     raise ArgumentError, "Did not find Global #{i} at ip=#{@current_ip}" if global.nil?
     push global
-    @tos_type = global.type_index
   end
 
   def vm_pushLoc(args)
@@ -303,7 +319,6 @@ class FglEngine
       raise ArgumentError, "Did not find Local #{i} at ip=#{@current_ip}." 
     end
     push local
-    @tos_type = local.type_index
   end
 
   def vm_pushMod(args)
@@ -313,12 +328,10 @@ class FglEngine
       raise ArgumentError, "Did not find Module Variable #{i} at ip=#{@current_ip}." 
     end
     push module_var
-    @tos_type = module_var.type_index
   end
 
   def vm_pushNull(args)
-    push 'nil'
-    @tos_type = nil
+    push 'nil', nil
   end
 
   def vm_call0(args)
@@ -343,6 +356,10 @@ class FglEngine
       statement = "# rts_OpPop(1) called, stack size=#{@context_stack.count}"
       @context_stack.pop
       push statement
+      :statement
+    when 'rts_initNull'
+      statement = call_args[0].map{|a| "#{a} = nil"}.join("\n")
+      push statement, nil
       :statement
     else
       push "#{name}(#{call_args.join(', ')})"
@@ -391,15 +408,18 @@ class FglEngine
 
   def vm_strSub(args)
     subscript = pop
-    string = pop
-    expression = "#{string}[#{subscript} - 1]"
-    push expression
+    string = pop_context
+    expression = "#{string[:data]}[#{subscript} - 1]"
+    push expression, string[:type]
   end
 
   # I _think_ strSubL is used when the string sub is the LHS of
   # an assignment? In ruby, it works, so just call strSub
   def vm_strSubL(args)
     vm_strSub(args)
+  end
+  def vm_strSubL2(args)
+    vm_strSub2(args)
   end
 
   def vm_strSub2(args)
@@ -415,39 +435,42 @@ class FglEngine
     else
       start_s = "#{start_s} -1"
     end
-    string = pop
-    expression = "#{string}[#{start_s}..#{end_s}]"
-    push expression
+    string = pop_context
+    expression = "#{string[:data]}[#{start_s}..#{end_s}]"
+    push expression, string[:type]
   end
 
   def vm_arrSub(args)
     subscript = pop
-    array = pop
-    @tos_type = array.type_index if array.respond_to?(:type_index)
-    expression = "#{array}[#{subscript}]"
-    type = @file.types[@tos_type]
-    @tos_type = type.array_type
-    push expression
+    array = pop_context
+    type = array[:type]
+    raise ArgumentError, "Type (#{type}) is not an array at line #{@current_line}, function #{@function.name}" unless type.respond_to?(:array_type) && type.array_type
+    expression = "#{array[:data]}[#{subscript}]"
+    push expression, @file.types[type.array_type]
   end
 
   def vm_member(args)
     member_index = args_to_index(args)
-    structure = pop
-    type = @file.types[@tos_type]
-    raise ArgumentError unless type.structure
-    expression = "#{structure}.#{type.structure[member_index].name}"
-    @tos_type = type.structure[member_index].type_index
-    push expression
+    structure = pop_context
+    type = structure[:type]
+    expression = structure[:data]
+    raise ArgumentError, "Expression #{expression} of type (#{type}) is not a structure at line #{@current_line}" unless type.structure
+    member = type.structure[member_index]
+    raise ArgumentError, "Expression #{expression} of type (#{type}) has no member at index (#{member_index}) at line #{@current_line}" unless member
+    
+    expression = "#{expression}.#{member.name}"
+    member_type = @file.types[member.type_index]
+    push expression, member_type
   end
 
   def vm_extend(args)
-    structure = pop
-    type = @file.types[@tos_type]
+    structure = pop_context
+    type = structure[:type]
     raise ArgumentError unless type.structure
     type.structure.each do |member|
-      push "#{structure}.#{member.name}"
+      member_type = @file.types[member.type_index]
+      push "#{structure[:data]}.#{member.name}", member_type
     end
-    @tos_type = type.structure.last.type_index
   end
 
   def vm_oper(args)
@@ -558,35 +581,35 @@ class FglEngine
       push lhs
       expression = "(#{lhs} == #{rhs})"
       push expression
-    when 26 # rts_Op2Using
-      format = pop
-      data = pop
-      expression = "(format_using(#{format},#{data}))"
-      push expression
-    when 27 #rts_OpFor
+    # rts_Op2Using was removed from FGL 3, operations after this were re-numbered down
+    # when 26 # rts_Op2Using
+    #   format = pop
+    #   data = pop
+    #   expression = "(format_using(#{format},#{data}))"
+    #   push expression
+    when 26 #rts_OpFor
       loop_end = pop
       loop_index = pop
       expression = "(#{loop_index}+=1 ; #{loop_end} - #{loop_index})"
       push expression
       :indent_down
-    when 28 # rts_OpForStep
+    when 27 # rts_OpForStep
       loop_end = pop
       loop_step = pop
       loop_index = pop
       expression = "(#{loop_index}+=#{loop_step} ; #{loop_end} - #{loop_index})"
       push expression
       :indent_down
+    when 28 # rts_OpPop
+      pop
     else
-      raise NotImplementedError, "Implement vm_oper (#{i})"
+      raise NotImplementedError, "Implement vm_oper (#{i}) at line #{@current_line}"
     end
   end
 
   def vm_genList(args)
     list_size = args_to_index(args)
     items = pop(list_size)
-    # if items.is_a?(Array)
-    #   items = [] #items.map{|a| a.to_s }.join(', ')
-    # end
     push items
   end
 
@@ -676,7 +699,6 @@ class FglEngine
     local = @function.locals[local_index]
     @function.arg_list ||= []
     @function.arg_list << local.name
-    #push "#{local.name} = arg.shift"
   end
 
 end
