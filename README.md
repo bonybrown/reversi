@@ -1,15 +1,71 @@
 # reversi
-General mischief arising from finding `fglrun -r`
+General mischief arising from finding the `fglrun -r` command that
+dumps the content of a `.42m` file into a human readable listing
+showing the types, constants, variables and function op codes in that file.
+
+## The FGL runtime
+Seems like the FGL runtime is a stack based VM, similar to a Java VM.
+
+For example, this sequence assigns the constant `0` to the global variable `gv_fatal`
+
+```
+       pushGlb   gv_fatal                  05 07
+       pushCon   `0'                       07 01
+       assF                                0f
+```
+The opcodes for each of the instructions are on the right. Constants, functions and variables
+are referenced by their index in tables for each kind of object. Each constant and variable
+has a data type, again referenced by index into a "types" table.
+
+The bytecode format is essentially machine code level. 
+Conditional constructs like `if` and `case` are implemented as jumps.
+
+```
+       pushGlb   status                    05 01
+       pushCon   `0'                       07 01
+       oper      rts_Op2Eq(2)              1a 09
+       *jpz      l_613                     22 05
+       pushLoc   fv_found                  01 02
+       pushCon   `1'                       07 00
+       assF                                0f
+l_613  *goto     l_617                     1e 02
+```
+This sequence can be interpreted as
+```
+if !(status == 0) then
+    goto l_613
+else
+    fv_found = 1
+end
+
+l_613:
+    goto l_617
+```
+That could be refined further as:
+```
+if status == 0 then fv_found = 1
+```
+
+### The FGL 42m file format
+The 42m file looks to be a series of "tables" for types, constants, variables
+(of global, module and function scope), functions (both those defined in the file,
+and referenced functions in other files), and the function code itself.
+Reverse engineering resources for the `.42m`
+file format are in the `/doc` directory.
 
 ## reversi.rb
 
-Takes the output of `fglrun -r` and turns it into a 
+Takes a `.42m` file and turns it into a 
 ruby-like approximation of the source code.
 
-There's plenty of work still to be done until
-the result is like `substr.rb` below.
+Because `if` and `case` statements are
+implemented as jumps, and ruby doesn't support jumps
+the output uses the [goto](https://github.com/bb/ruby-goto)
+gem to emulate this. The code doesn't do any flow analysis
+to optimise the jumps into simplier `if...then...else` blocks.
 
 ## Output Formats
+***Not really implemented yet***
 
 The `--output` command line switch controls the output format
 of the command.
@@ -28,40 +84,11 @@ In this output, the output lines match the original source.
 
 This format is suitable for use with the fglrun debugger.
 
-## executable (not yet implemented)
+## executable (this is the current default)
 
 This format is to be in a form of ruby code that can be
 executed. It will contain code blocks in a hash of proc
 objects and could be quite hard to read.
-
-## substr.rb
-
-This is a hand-modified version of a function
-generated from `reversi.rb` that is able to be
-run:
-```
-ruby -r './substr' -e "puts Substr::wh_delim_count('3/3/2/4','/')"
-
-=> 3
-```
-
-Features of `substr.rb` are that blocks of
-code are sectioned into lambdas based on the
-labels defined in the decompilation. GOTO statements
-are implemented as early `return`s from the lambda
-with the returned value being a symbol referencing the GOTO target's label.
-
-When each lambda is invoked, the return value is checked
-to see if it is a symbol reference to another lambda block.
-
-If so, that code block is is called.
-
-If not, the logically `next` lambda block in the code flow
-is called.
-
-*TODO:* may need to return some kind of return object that indicates an 
-_actual_ return statement has been executed, to cater
-for early returned functions.
 
 
 ## Useful links
