@@ -25,7 +25,7 @@ class FglEngine
     0x16 => { name: :vm_call1, argc: 2 },
     0x17 => { name: :vm_callN, argc: 1 },
     0x18 => { name: :vm_callN, argc: 2 },
-    0x19 => { name: :vm_callRep, argc: 7 },
+    0x19 => { name: :vm_callRep, argc: 4 },
     0x1a => { name: :vm_oper, argc: 1 },
     0x1b => { name: :vm_retAll, argc: 1 },
     0x1c => { name: :vm_retAll, argc: 2 },
@@ -156,9 +156,9 @@ class FglEngine
 
       result = send(instruction_name, args)
       # HEAVY DEBUG
-      #puts 
-      #puts "At IP=#{@ip}, stack is:"
-      #@context_stack.map{|x| [x[:data], x[:type]]}.each{|i| puts "\t #{i}" }
+      # puts
+      # puts "At IP=#{@ip} line=#{@current_line}, stack is:"
+      # @context_stack.map{|x| [x[:data], x[:type]]}.each{|i| puts "\t #{i}" }
       if result == :statement
         context = @context_stack.pop
         #puts "STATEMENT #{context}"
@@ -358,6 +358,7 @@ class FglEngine
       push statement
       :statement
     when 'rts_initNull'
+      call_args[0] = Array(call_args[0])
       statement = call_args[0].map{|a| "#{a} = nil"}.join("\n")
       push statement, nil
       :statement
@@ -403,6 +404,7 @@ class FglEngine
     dest = pop(count).map{|a| a.to_s}.join(', ')
     source = pop
     push "#{dest} = #{source}"
+    :statement
   end
 
 
@@ -480,6 +482,10 @@ class FglEngine
       rhs = pop
       expression = "#{rhs}.to_s.strip"
       push expression
+    when 1 #rts_Op1Column
+      rhs = pop
+      expression = "Reporting.at_column(#{rhs})"
+      push expression
     when 2 #rts_Op1IsNotNull
       rhs = pop
       expression = "!#{rhs}.nil?"
@@ -529,6 +535,11 @@ class FglEngine
       rhs = pop
       lhs = pop
       expression = "#{lhs} - #{rhs}"
+      push expression
+    when 14 # rts_Op2IntMu
+      rhs = pop
+      lhs = pop
+      expression = "(#{lhs} * #{rhs}).to_i"
       push expression
     when 15 # rts_Op2IntPl
       rhs = pop
@@ -647,7 +658,7 @@ class FglEngine
     test_variable = "tmp_#{@case_statement_start_ip}"
     if @case_statement_start_ip == @current_ip
       # capture last expression value with single underscore
-      expr_capture = "#{test_variable} = _ ;"
+      expr_capture = "#{test_variable} = _ # Capture last expression value for use in this case-like structure\n"
     end
     compare = args_to_signed([args[0],args[1]])
     offset = args_to_signed(args[2..])
@@ -691,6 +702,7 @@ class FglEngine
   end
 
   def vm_ret(args)
+    push "return"
     :statement
   end
 
@@ -699,6 +711,20 @@ class FglEngine
     local = @function.locals[local_index]
     @function.arg_list ||= []
     @function.arg_list << local.name
+  end
+
+  def vm_repSetOp(args)
+    push "Reporting.get_report_operation()"
+    :statement
+  end
+
+  def vm_callRep(args)
+    function_index = args_to_index(args[0..1])
+    function = @file.functions.values[function_index]
+    arg_count = args_to_index(args[2..3])
+    call_args = pop(arg_count)
+    push "Reporting.call #{function.name}(#{call_args.join(', ')})"
+    :statement
   end
 
 end

@@ -111,11 +111,6 @@ class FglParser
         raise ArgumentError, "Unknown type id #{function_index}" unless type
         self.locals ||= []
         self.locals << g
-        if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
-          type.structure.each do |member|
-            self.locals << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
-          end
-        end
       end
     end
     class FglModule
@@ -138,11 +133,6 @@ class FglParser
         type = types[function_index]
         raise ArgumentError, "Unknown type id #{function_index}" unless type
         globals << g
-        # if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
-        #   type.structure.each do |member|
-        #     globals << GlobalVariable.new("#{g.name}.#{member.name}", member.type_index, g)
-        #   end
-        # end
       end
 
       def add_module_var(g)
@@ -151,11 +141,6 @@ class FglParser
         type = types[function_index]
         raise ArgumentError, "Unknown type id #{function_index}" unless type
         module_vars << g
-        # if type.type_id == 16 # it's a RECORD aka Struct. Each member is added to the constants, too
-        #   type.structure.each do |member|
-        #     module_vars << Variable.new("#{g.name}.#{member.name}", member.type_index, g)
-        #   end
-        # end
       end
 
       def add_function(f)
@@ -232,7 +217,7 @@ class FglParser
         when 5 #function
           read_function_body
         when 11 #end
-          break
+          read_function_body
         when 12 # unknown, seems to be two bytes long
           read_word
         when 14 # unknown yet, perhaps EOF?
